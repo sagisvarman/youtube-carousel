@@ -35,10 +35,27 @@ const AutoCarousel = () => {
   const pausedTime = useRef(null);
   const preloadDistance = 1; // How many videos to preload ahead
 
-  // Initialize videoRefs array
+  // Initialize videoRefs array and force autoplay on first load
   useEffect(() => {
     videoRefs.current = videoRefs.current.slice(0, slides.length);
-  }, [slides.length]);
+    
+    // Add a small delay to ensure iframe is loaded
+    const initialPlayTimer = setTimeout(() => {
+      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
+        try {
+          // Force play on the current video
+          videoRefs.current[currentSlide].contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'playVideo' }),
+            '*'
+          );
+        } catch (error) {
+          console.error('Error starting initial video playback:', error);
+        }
+      }
+    }, 1000); // 1 second delay to ensure iframe API is ready
+    
+    return () => clearTimeout(initialPlayTimer);
+  }, [slides.length, currentSlide]);
 
   // Function to preload videos
   const preloadVideos = useCallback(() => {
@@ -97,7 +114,8 @@ const AutoCarousel = () => {
       if (videoRef && videoRef.contentWindow) {
         try {
           if (index === currentSlide) {
-            // Play current slide video
+            // Force start the current video - this makes sure it autoplays
+            // even if YouTube's autoplay setting doesn't work
             videoRef.contentWindow.postMessage(
               JSON.stringify({ 
                 event: 'command', 
@@ -106,7 +124,20 @@ const AutoCarousel = () => {
               '*'
             );
             
-            // Unmute current video
+            // Repeat the command after a short delay - this helps in some browsers
+            setTimeout(() => {
+              if (videoRef && videoRef.contentWindow) {
+                videoRef.contentWindow.postMessage(
+                  JSON.stringify({ 
+                    event: 'command', 
+                    func: 'playVideo',
+                  }),
+                  '*'
+                );
+              }
+            }, 300);
+            
+            // Unmute current video if you want sound
             videoRef.contentWindow.postMessage(
               JSON.stringify({ 
                 event: 'command', 
@@ -337,7 +368,7 @@ const AutoCarousel = () => {
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=0&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=1&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
