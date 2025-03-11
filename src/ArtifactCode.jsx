@@ -28,6 +28,7 @@ const AutoCarousel = () => {
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoaded, setIsLoaded] = useState(Array(slides.length).fill(false));
+  const [playersReady, setPlayersReady] = useState(Array(slides.length).fill(false));
   const progressInterval = useRef(null);
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
@@ -35,27 +36,10 @@ const AutoCarousel = () => {
   const pausedTime = useRef(null);
   const preloadDistance = 1; // How many videos to preload ahead
 
-  // Initialize videoRefs array and force autoplay on first load
+  // Initialize videoRefs array
   useEffect(() => {
     videoRefs.current = videoRefs.current.slice(0, slides.length);
-    
-    // Add a small delay to ensure iframe is loaded
-    const initialPlayTimer = setTimeout(() => {
-      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
-        try {
-          // Force play on the current video
-          videoRefs.current[currentSlide].contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'playVideo' }),
-            '*'
-          );
-        } catch (error) {
-          console.error('Error starting initial video playback:', error);
-        }
-      }
-    }, 1000); // 1 second delay to ensure iframe API is ready
-    
-    return () => clearTimeout(initialPlayTimer);
-  }, [slides.length, currentSlide]);
+  }, [slides.length]);
 
   // Function to preload videos
   const preloadVideos = useCallback(() => {
@@ -114,8 +98,7 @@ const AutoCarousel = () => {
       if (videoRef && videoRef.contentWindow) {
         try {
           if (index === currentSlide) {
-            // Force start the current video - this makes sure it autoplays
-            // even if YouTube's autoplay setting doesn't work
+            // Play current slide video
             videoRef.contentWindow.postMessage(
               JSON.stringify({ 
                 event: 'command', 
@@ -124,20 +107,7 @@ const AutoCarousel = () => {
               '*'
             );
             
-            // Repeat the command after a short delay - this helps in some browsers
-            setTimeout(() => {
-              if (videoRef && videoRef.contentWindow) {
-                videoRef.contentWindow.postMessage(
-                  JSON.stringify({ 
-                    event: 'command', 
-                    func: 'playVideo',
-                  }),
-                  '*'
-                );
-              }
-            }, 300);
-            
-            // Unmute current video if you want sound
+            // Unmute current video
             videoRef.contentWindow.postMessage(
               JSON.stringify({ 
                 event: 'command', 
@@ -263,8 +233,7 @@ const AutoCarousel = () => {
           
           // Then set up the regular interval
           slideInterval.current = setInterval(() => {
-            const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
-            setCurrentSlide(nextSlide);
+            setCurrentSlide(prev => (prev === slides.length - 1 ? 0 : prev + 1));
             startProgressBar(true);
           }, totalDuration);
         }, remainingTime);
@@ -278,8 +247,7 @@ const AutoCarousel = () => {
       } else {
         // If we don't have a valid remaining time, start normal interval
         slideInterval.current = setInterval(() => {
-          const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
-          setCurrentSlide(nextSlide);
+          setCurrentSlide(prev => (prev === slides.length - 1 ? 0 : prev + 1));
           startProgressBar(true);
         }, totalDuration);
       }
@@ -332,6 +300,38 @@ const AutoCarousel = () => {
       try {
         const data = JSON.parse(event.data);
         
+        // Handle player ready events
+        if (data.event === "onReady") {
+          // Find which player sent this ready event by looking at event.source
+          const playerIndex = videoRefs.current.findIndex(ref => 
+            ref && ref.contentWindow === event.source);
+          
+          if (playerIndex !== -1) {
+            // Mark this player as ready
+            setPlayersReady(prev => {
+              const newReady = [...prev];
+              newReady[playerIndex] = true;
+              return newReady;
+            });
+            
+            // If this is the current slide, play it immediately
+            if (playerIndex === currentSlide && !isPaused) {
+              event.source.postMessage(
+                JSON.stringify({ event: 'command', func: 'playVideo' }),
+                '*'
+              );
+              
+              // Only unmute the current video
+              if (playerIndex === currentSlide) {
+                event.source.postMessage(
+                  JSON.stringify({ event: 'command', func: 'unMute' }),
+                  '*'
+                );
+              }
+            }
+          }
+        }
+        
         // Handle player state changes
         if (data.event === "onStateChange") {
           // Video is ready (buffering finished)
@@ -349,7 +349,7 @@ const AutoCarousel = () => {
     return () => {
       window.removeEventListener("message", handleIframeMessages);
     };
-  }, []);
+  }, [currentSlide, isPaused]);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
