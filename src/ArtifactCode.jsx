@@ -178,26 +178,10 @@ const AutoCarousel = () => {
       // If we're pausing, store the current progress and timestamp
       pausedAt.current = progress;
       pausedTime.current = Date.now();
-      
-      // Pause the current video when carousel is paused
-      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
-        videoRefs.current[currentSlide].contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'pauseVideo' }),
-          '*'
-        );
-      }
-    } else {
-      // Resume the current video when carousel is resumed
-      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
-        videoRefs.current[currentSlide].contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'playVideo' }),
-          '*'
-        );
-      }
     }
     
     setIsPaused(prev => !prev);
-  }, [progress, isPaused, currentSlide]);
+  }, [progress, isPaused]);
 
   // Effect to preload videos when currentSlide changes
   useEffect(() => {
@@ -353,7 +337,7 @@ const AutoCarousel = () => {
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? '1' : '0'}&mute=${index === currentSlide ? '0' : '1'}&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=0&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
