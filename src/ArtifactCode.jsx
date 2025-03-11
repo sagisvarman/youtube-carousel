@@ -28,7 +28,6 @@ const AutoCarousel = () => {
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoaded, setIsLoaded] = useState(Array(slides.length).fill(false));
-  const [playersReady, setPlayersReady] = useState(Array(slides.length).fill(false));
   const progressInterval = useRef(null);
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
@@ -179,10 +178,26 @@ const AutoCarousel = () => {
       // If we're pausing, store the current progress and timestamp
       pausedAt.current = progress;
       pausedTime.current = Date.now();
+      
+      // Pause the current video when carousel is paused
+      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
+        videoRefs.current[currentSlide].contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'pauseVideo' }),
+          '*'
+        );
+      }
+    } else {
+      // Resume the current video when carousel is resumed
+      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
+        videoRefs.current[currentSlide].contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'playVideo' }),
+          '*'
+        );
+      }
     }
     
     setIsPaused(prev => !prev);
-  }, [progress, isPaused]);
+  }, [progress, isPaused, currentSlide]);
 
   // Effect to preload videos when currentSlide changes
   useEffect(() => {
@@ -233,7 +248,8 @@ const AutoCarousel = () => {
           
           // Then set up the regular interval
           slideInterval.current = setInterval(() => {
-            setCurrentSlide(prev => (prev === slides.length - 1 ? 0 : prev + 1));
+            const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
+            setCurrentSlide(nextSlide);
             startProgressBar(true);
           }, totalDuration);
         }, remainingTime);
@@ -247,7 +263,8 @@ const AutoCarousel = () => {
       } else {
         // If we don't have a valid remaining time, start normal interval
         slideInterval.current = setInterval(() => {
-          setCurrentSlide(prev => (prev === slides.length - 1 ? 0 : prev + 1));
+          const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
+          setCurrentSlide(nextSlide);
           startProgressBar(true);
         }, totalDuration);
       }
@@ -300,38 +317,6 @@ const AutoCarousel = () => {
       try {
         const data = JSON.parse(event.data);
         
-        // Handle player ready events
-        if (data.event === "onReady") {
-          // Find which player sent this ready event by looking at event.source
-          const playerIndex = videoRefs.current.findIndex(ref => 
-            ref && ref.contentWindow === event.source);
-          
-          if (playerIndex !== -1) {
-            // Mark this player as ready
-            setPlayersReady(prev => {
-              const newReady = [...prev];
-              newReady[playerIndex] = true;
-              return newReady;
-            });
-            
-            // If this is the current slide, play it immediately
-            if (playerIndex === currentSlide && !isPaused) {
-              event.source.postMessage(
-                JSON.stringify({ event: 'command', func: 'playVideo' }),
-                '*'
-              );
-              
-              // Only unmute the current video
-              if (playerIndex === currentSlide) {
-                event.source.postMessage(
-                  JSON.stringify({ event: 'command', func: 'unMute' }),
-                  '*'
-                );
-              }
-            }
-          }
-        }
-        
         // Handle player state changes
         if (data.event === "onStateChange") {
           // Video is ready (buffering finished)
@@ -349,7 +334,7 @@ const AutoCarousel = () => {
     return () => {
       window.removeEventListener("message", handleIframeMessages);
     };
-  }, [currentSlide, isPaused]);
+  }, []);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -368,7 +353,7 @@ const AutoCarousel = () => {
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=1&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? '1' : '0'}&mute=${index === currentSlide ? '0' : '1'}&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
