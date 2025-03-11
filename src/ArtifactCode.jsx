@@ -28,205 +28,174 @@ const AutoCarousel = () => {
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoaded, setIsLoaded] = useState(Array(slides.length).fill(false));
-  const [activeVideos, setActiveVideos] = useState([0]); // Track which videos are active/loaded
   const progressInterval = useRef(null);
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
   const pausedAt = useRef(0);
   const pausedTime = useRef(null);
-  const slideDuration = 5000; // 5 seconds
+  const preloadDistance = 1; // How many videos to preload ahead
 
-  // Initialize refs
+  // Initialize videoRefs array
   useEffect(() => {
     videoRefs.current = videoRefs.current.slice(0, slides.length);
   }, [slides.length]);
 
-  // Preload adjacent videos
-  const preloadAdjacentVideos = useCallback(() => {
-    // Calculate which videos should be active (current + next + previous)
-    const nextSlide = (currentSlide + 1) % slides.length;
-    const prevSlide = (currentSlide - 1 + slides.length) % slides.length;
-    
-    // Update active videos - this will cause them to load
-    setActiveVideos([prevSlide, currentSlide, nextSlide]);
-    
-    // Mark current slide as loaded after a short delay to ensure it starts playing
-    setTimeout(() => {
-      setIsLoaded(prev => {
-        const newLoaded = [...prev];
-        newLoaded[currentSlide] = true;
-        return newLoaded;
-      });
-    }, 100);
-  }, [currentSlide, slides.length]);
-
-  // Handle video iframe events
-  const setupVideoListeners = useCallback(() => {
-    // Function to handle messages from iframes
-    const handleMessage = (event) => {
-      if (event.origin !== "https://www.youtube.com") return;
+  // Function to preload videos
+  const preloadVideos = useCallback(() => {
+    // Determine which videos should be preloaded
+    for (let i = 0; i < slides.length; i++) {
+      // Calculate distance from current slide (handle circular distance)
+      const distance = Math.min(
+        (i - currentSlide + slides.length) % slides.length,
+        (currentSlide - i + slides.length) % slides.length
+      );
       
-      try {
-        const data = JSON.parse(event.data);
+      // Preload current and nearby videos
+      if (distance <= preloadDistance && videoRefs.current[i]) {
+        const iframe = videoRefs.current[i];
         
-        // Handle player state changes
-        if (data.event === "onStateChange") {
-          // Video is playing (1) or buffering (3)
-          if (data.info === 1 || data.info === 3) {
-            // Find which iframe triggered this
-            const index = videoRefs.current.findIndex(ref => {
-              return ref && ref.contentWindow === event.source;
-            });
-            
-            if (index !== -1) {
+        // Set to high quality but muted until it becomes current
+        if (iframe.contentWindow) {
+          try {
+            // If not already loaded, set it up
+            if (!isLoaded[i]) {
+              iframe.contentWindow.postMessage(
+                JSON.stringify({ 
+                  event: 'command', 
+                  func: 'loadVideoById', 
+                  args: [slides[i].videoId, 0, 'hd720']
+                }),
+                '*'
+              );
+              
               // Mark as loaded
               setIsLoaded(prev => {
                 const newLoaded = [...prev];
-                newLoaded[index] = true;
+                newLoaded[i] = true;
                 return newLoaded;
               });
+              
+              // Immediately pause if not current slide
+              if (i !== currentSlide) {
+                iframe.contentWindow.postMessage(
+                  JSON.stringify({ event: 'command', func: 'pauseVideo' }),
+                  '*'
+                );
+              }
             }
+          } catch (error) {
+            console.error('Error preloading video:', error);
           }
         }
-      } catch (e) {
-        // Not a JSON message or parsing error
       }
-    };
+    }
+  }, [currentSlide, isLoaded, slides]);
 
-    // Add event listener
-    window.addEventListener("message", handleMessage);
-    
-    // Return cleanup function
-    return () => {
-      window.removeEventListener("message", handleMessage);
-    };
-  }, []);
-
-  // Update active videos when slide changes
-  useEffect(() => {
-    preloadAdjacentVideos();
-  }, [currentSlide, preloadAdjacentVideos]);
-
-  // Set up message listener
-  useEffect(() => {
-    const cleanup = setupVideoListeners();
-    return cleanup;
-  }, [setupVideoListeners]);
-
-  // Play current video and pause others
+  // Function to play the current video and pause others
   const handleVideoPlayback = useCallback(() => {
     videoRefs.current.forEach((videoRef, index) => {
-      if (!videoRef || !videoRef.contentWindow) return;
-      
-      try {
-        if (index === currentSlide) {
-          // Play and unmute current video
-          videoRef.contentWindow.postMessage(
-            JSON.stringify({ 
-              event: 'command', 
-              func: 'playVideo',
-            }),
-            '*'
-          );
-          
-          videoRef.contentWindow.postMessage(
-            JSON.stringify({ 
-              event: 'command', 
-              func: 'unMute',
-            }),
-            '*'
-          );
-        } else {
-          // Pause all other videos
-          videoRef.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'pauseVideo' }),
-            '*'
-          );
-          
-          // Keep other videos muted
-          videoRef.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'mute' }),
-            '*'
-          );
+      if (videoRef && videoRef.contentWindow) {
+        try {
+          if (index === currentSlide) {
+            // Play current slide video
+            videoRef.contentWindow.postMessage(
+              JSON.stringify({ 
+                event: 'command', 
+                func: 'playVideo',
+              }),
+              '*'
+            );
+            
+            // Unmute current video
+            videoRef.contentWindow.postMessage(
+              JSON.stringify({ 
+                event: 'command', 
+                func: 'unMute',
+              }),
+              '*'
+            );
+          } else {
+            // Pause all other videos
+            videoRef.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo' }),
+              '*'
+            );
+            
+            // Mute other videos
+            videoRef.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'mute' }),
+              '*'
+            );
+          }
+        } catch (error) {
+          console.error('Error controlling YouTube video:', error);
         }
-      } catch (error) {
-        console.error('Error controlling video:', error);
       }
     });
   }, [currentSlide]);
 
-  // Effect for video playback when slide changes
-  useEffect(() => {
-    // Short timeout to ensure iframe is ready
-    const timer = setTimeout(() => {
-      handleVideoPlayback();
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, [currentSlide, handleVideoPlayback]);
-
-  // Progress bar management
+  // Function to reset and start progress bar
   const startProgressBar = useCallback((startFromZero = false) => {
+    // Don't start if paused
     if (isPaused) return;
     
+    // Clear any existing interval
     if (progressInterval.current) {
       clearInterval(progressInterval.current);
     }
     
+    // Get start time and initial progress
     const startTime = Date.now();
     let initialProgress = 0;
     
+    // If we're resuming (not starting from zero), use the saved progress
     if (!startFromZero && pausedAt.current > 0) {
       initialProgress = pausedAt.current;
+      setProgress(initialProgress);
+    } else {
+      // Otherwise reset progress
+      setProgress(0);
     }
     
-    setProgress(initialProgress);
-    
-    const elapsedTime = (initialProgress / 100) * slideDuration;
+    const duration = 5000; // 5 seconds in milliseconds
+    const elapsedTime = (initialProgress / 100) * duration;
     
     progressInterval.current = setInterval(() => {
       const elapsed = Date.now() - startTime + elapsedTime;
-      const newProgress = Math.min(100, (elapsed / slideDuration) * 100);
+      const newProgress = Math.min(100, (elapsed / duration) * 100);
       setProgress(newProgress);
       
+      // Clear interval when we reach 100%
       if (newProgress >= 100) {
         clearInterval(progressInterval.current);
       }
-    }, 16);
-  }, [isPaused, slideDuration]);
+    }, 16); // Update roughly 60 times per second for smooth animation
+  }, [isPaused]);
 
-  // Toggle pause state
+  // Toggle pause/play
   const togglePause = useCallback(() => {
     if (!isPaused) {
-      // Pause - store current progress
+      // If we're pausing, store the current progress and timestamp
       pausedAt.current = progress;
       pausedTime.current = Date.now();
-      
-      // Pause current video
-      const videoRef = videoRefs.current[currentSlide];
-      if (videoRef && videoRef.contentWindow) {
-        videoRef.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'pauseVideo' }),
-          '*'
-        );
-      }
-    } else {
-      // Resume - restart video
-      const videoRef = videoRefs.current[currentSlide];
-      if (videoRef && videoRef.contentWindow) {
-        videoRef.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'playVideo' }),
-          '*'
-        );
-      }
     }
     
     setIsPaused(prev => !prev);
-  }, [progress, isPaused, currentSlide]);
+  }, [progress, isPaused]);
 
-  // Auto-scroll management
+  // Effect to preload videos when currentSlide changes
   useEffect(() => {
-    // Clear any existing intervals
+    preloadVideos();
+  }, [currentSlide, preloadVideos]);
+
+  // Effect to handle video playback when slide changes
+  useEffect(() => {
+    handleVideoPlayback();
+  }, [currentSlide, handleVideoPlayback]);
+
+  // Effect to handle pause state changes
+  useEffect(() => {
+    // Clear any existing intervals first
     if (slideInterval.current) {
       clearInterval(slideInterval.current);
       slideInterval.current = null;
@@ -237,74 +206,119 @@ const AutoCarousel = () => {
       progressInterval.current = null;
     }
     
-    // Only proceed if not paused
+    // Only set up intervals if NOT paused
     if (!isPaused) {
-      startProgressBar(false);
+      // Start progress bar from saved position if available
+      startProgressBar(false); // false means don't start from zero
       
+      // Calculate remaining time for this slide
       const remainingPercent = 100 - pausedAt.current;
-      const remainingTime = (remainingPercent / 100) * slideDuration;
+      const totalDuration = 5000; // 5 seconds
+      const remainingTime = (remainingPercent / 100) * totalDuration;
       
-      if (remainingTime > 0 && remainingTime < slideDuration) {
-        // Handle remaining time for current slide
+      // Set up auto-scroll interval with the remaining time for the first cycle
+      if (remainingTime > 0 && remainingTime < totalDuration) {
+        // First, set a one-time timeout for the remaining time
         const timeout = setTimeout(() => {
-          const nextSlide = (currentSlide + 1) % slides.length;
+          // Preload the next slide before moving to it
+          const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
+          
+          // Move to next slide when the remaining time is up
           setCurrentSlide(nextSlide);
+          
+          // Reset progress and start a normal interval
           pausedAt.current = 0;
           startProgressBar(true);
           
-          // Set up regular interval
+          // Then set up the regular interval
           slideInterval.current = setInterval(() => {
-            setCurrentSlide(prev => (prev + 1) % slides.length);
+            const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
+            setCurrentSlide(nextSlide);
             startProgressBar(true);
-          }, slideDuration);
+          }, totalDuration);
         }, remainingTime);
         
-        // Return cleanup function
+        // Store the timeout ID for cleanup
         return () => {
           clearTimeout(timeout);
           if (slideInterval.current) clearInterval(slideInterval.current);
           if (progressInterval.current) clearInterval(progressInterval.current);
         };
       } else {
-        // Set up regular interval
+        // If we don't have a valid remaining time, start normal interval
         slideInterval.current = setInterval(() => {
-          setCurrentSlide(prev => (prev + 1) % slides.length);
+          const nextSlide = currentSlide === slides.length - 1 ? 0 : currentSlide + 1;
+          setCurrentSlide(nextSlide);
           startProgressBar(true);
-        }, slideDuration);
+        }, totalDuration);
       }
     }
     
-    // Return cleanup function
     return () => {
-      if (slideInterval.current) clearInterval(slideInterval.current);
-      if (progressInterval.current) clearInterval(progressInterval.current);
+      if (slideInterval.current) {
+        clearInterval(slideInterval.current);
+      }
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+      }
     };
-  }, [isPaused, slides.length, startProgressBar, currentSlide, slideDuration]);
+  }, [isPaused, slides.length, startProgressBar, currentSlide]);
 
-  // Navigation functions
+  // Manual navigation
   const goToSlide = useCallback((index) => {
     setCurrentSlide(index);
     if (!isPaused) {
-      pausedAt.current = 0;
-      startProgressBar(true);
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, startProgressBar]);
 
   const goToPrevSlide = useCallback(() => {
-    setCurrentSlide(prev => prev === 0 ? slides.length - 1 : prev - 1);
+    setCurrentSlide((prevSlide) => 
+      prevSlide === 0 ? slides.length - 1 : prevSlide - 1
+    );
     if (!isPaused) {
-      pausedAt.current = 0;
-      startProgressBar(true);
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, slides.length, startProgressBar]);
 
   const goToNextSlide = useCallback(() => {
-    setCurrentSlide(prev => (prev + 1) % slides.length);
+    setCurrentSlide((prevSlide) => 
+      prevSlide === slides.length - 1 ? 0 : prevSlide + 1
+    );
     if (!isPaused) {
-      pausedAt.current = 0;
-      startProgressBar(true);
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, slides.length, startProgressBar]);
+
+  // Handler for iframe messages (to know when videos are ready)
+  useEffect(() => {
+    const handleIframeMessages = (event) => {
+      if (event.origin !== "https://www.youtube.com") return;
+      
+      try {
+        const data = JSON.parse(event.data);
+        
+        // Handle player state changes
+        if (data.event === "onStateChange") {
+          // Video is ready (buffering finished)
+          if (data.info === 1) {
+            // Video started playing
+            console.log("Video started playing");
+          }
+        }
+      } catch (e) {
+        // Not a JSON message or parsing error
+      }
+    };
+
+    window.addEventListener("message", handleIframeMessages);
+    return () => {
+      window.removeEventListener("message", handleIframeMessages);
+    };
+  }, []);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -320,21 +334,18 @@ const AutoCarousel = () => {
               className="flex-shrink-0 w-full relative overflow-hidden h-64"
             >
               <div className="w-full h-full absolute top-0 left-0 right-0 bottom-0 bg-black">
-                {/* Only render iframes for active videos to improve performance */}
-                {activeVideos.includes(index) && (
-                  <iframe
-                    ref={el => videoRefs.current[index] = el}
-                    className="w-full h-full absolute top-0 left-0"
-                    src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? '1' : '0'}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}&version=3`}
-                    title={`YouTube video ${slide.title}`}
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                  ></iframe>
-                )}
+                <iframe
+                  ref={el => videoRefs.current[index] = el}
+                  className="w-full h-full absolute top-0 left-0"
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=0&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
+                  title={`YouTube video ${slide.title}`}
+                  frameBorder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                ></iframe>
                 
-                {/* Loading indicator */}
-                {!isLoaded[index] && activeVideos.includes(index) && (
+                {/* Loading indicator - shows only when video isn't loaded yet */}
+                {!isLoaded[index] && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
                     <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
                   </div>
@@ -381,7 +392,7 @@ const AutoCarousel = () => {
           </div>
         </div>
         
-        {/* Pause/Play Button */}
+        {/* Pause/Play Button for carousel auto-scroll */}
         <button
           className="absolute bottom-3 left-4 bg-white/30 hover:bg-white/50 text-white w-8 h-8 rounded-full flex items-center justify-center"
           onClick={togglePause}
