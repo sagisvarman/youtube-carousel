@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const AutoCarousel = () => {
   const slides = [
@@ -41,11 +41,11 @@ const AutoCarousel = () => {
   }, [slides.length]);
 
   // Function to play the current video and pause others
-  const handleVideoPlayback = () => {
+  const handleVideoPlayback = useCallback(() => {
     videoRefs.current.forEach((videoRef, index) => {
       if (videoRef && videoRef.contentWindow) {
         try {
-          if (index === currentSlide && !isPaused) {
+          if (index === currentSlide) {
             // Play current slide video
             videoRef.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'playVideo' }),
@@ -63,10 +63,10 @@ const AutoCarousel = () => {
         }
       }
     });
-  };
+  }, [currentSlide]);
 
   // Function to reset and start progress bar
-  const startProgressBar = () => {
+  const startProgressBar = useCallback(() => {
     // Don't start if paused
     if (isPaused) return;
     
@@ -92,69 +92,37 @@ const AutoCarousel = () => {
         clearInterval(progressInterval.current);
       }
     }, 16); // Update roughly 60 times per second for smooth animation
-  };
+  }, [isPaused]);
 
   // Toggle pause/play
-  const togglePause = () => {
+  const togglePause = useCallback(() => {
     setIsPaused(prev => !prev);
-  };
+  }, []);
 
-  // Auto-scroll effect
+  // Effect to handle video playback when slide changes
   useEffect(() => {
-    // Start progress bar immediately when component mounts
-    startProgressBar();
-    
-    // Control video playback when slide changes
     handleVideoPlayback();
-    
-    // Set up the interval
-    const setupInterval = () => {
-      // Clear any existing interval
-      if (slideInterval.current) {
-        clearInterval(slideInterval.current);
-      }
-      
-      // Don't set a new interval if paused
-      if (isPaused) return;
-      
-      slideInterval.current = setInterval(() => {
-        setCurrentSlide((prevSlide) => 
-          prevSlide === slides.length - 1 ? 0 : prevSlide + 1
-        );
-        // Restart progress bar after slide changes
-        startProgressBar();
-      }, 5000); // 5 seconds interval
-    };
-    
-    // Set up the interval initially
-    setupInterval();
-    
-    // Clean up all intervals on component unmount
-    return () => {
-      clearInterval(slideInterval.current);
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
-    };
-  }, [currentSlide, slides.length, isPaused]);
+  }, [currentSlide, handleVideoPlayback]);
 
   // Effect to handle pause state changes
   useEffect(() => {
-    if (isPaused) {
-      // Pause the interval and videos
-      if (slideInterval.current) {
-        clearInterval(slideInterval.current);
-      }
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
-      handleVideoPlayback(); // Will pause videos
-    } else {
-      // Resume progress and interval
+    // Clear any existing intervals first
+    if (slideInterval.current) {
+      clearInterval(slideInterval.current);
+      slideInterval.current = null;
+    }
+    
+    if (progressInterval.current) {
+      clearInterval(progressInterval.current);
+      progressInterval.current = null;
+    }
+    
+    // Only set up intervals if NOT paused
+    if (!isPaused) {
+      // Start progress bar
       startProgressBar();
-      handleVideoPlayback(); // Will play current video
       
-      // Set up the interval again
+      // Set up auto-scroll interval
       slideInterval.current = setInterval(() => {
         setCurrentSlide((prevSlide) => 
           prevSlide === slides.length - 1 ? 0 : prevSlide + 1
@@ -167,34 +135,37 @@ const AutoCarousel = () => {
       if (slideInterval.current) {
         clearInterval(slideInterval.current);
       }
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+      }
     };
-  }, [isPaused]);
+  }, [isPaused, slides.length, startProgressBar]);
 
   // Manual navigation
-  const goToSlide = (index) => {
+  const goToSlide = useCallback((index) => {
     setCurrentSlide(index);
     if (!isPaused) {
       startProgressBar(); // Reset progress bar on manual navigation
     }
-  };
+  }, [isPaused, startProgressBar]);
 
-  const goToPrevSlide = () => {
+  const goToPrevSlide = useCallback(() => {
     setCurrentSlide((prevSlide) => 
       prevSlide === 0 ? slides.length - 1 : prevSlide - 1
     );
     if (!isPaused) {
       startProgressBar(); // Reset progress bar on manual navigation
     }
-  };
+  }, [isPaused, slides.length, startProgressBar]);
 
-  const goToNextSlide = () => {
+  const goToNextSlide = useCallback(() => {
     setCurrentSlide((prevSlide) => 
       prevSlide === slides.length - 1 ? 0 : prevSlide + 1
     );
     if (!isPaused) {
       startProgressBar(); // Reset progress bar on manual navigation
     }
-  };
+  }, [isPaused, slides.length, startProgressBar]);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -213,7 +184,7 @@ const AutoCarousel = () => {
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide && !isPaused ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0`}
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -252,7 +223,7 @@ const AutoCarousel = () => {
         </div>
         
         {/* Progress bar */}
-        <div className="absolute bottom-4 left-4 right-16">
+        <div className="absolute bottom-4 left-12 right-4">
           <div className="w-full bg-white/30 h-2 rounded-full overflow-hidden">
             <div 
               className="h-full bg-white transition-all duration-100 ease-linear"
@@ -261,10 +232,11 @@ const AutoCarousel = () => {
           </div>
         </div>
         
-        {/* Pause/Play Button */}
+        {/* Pause/Play Button for carousel auto-scroll */}
         <button
-          className="absolute bottom-3 right-4 bg-white/30 hover:bg-white/50 text-white w-8 h-8 rounded-full flex items-center justify-center"
+          className="absolute bottom-3 left-4 bg-white/30 hover:bg-white/50 text-white w-8 h-8 rounded-full flex items-center justify-center"
           onClick={togglePause}
+          title={isPaused ? "Resume auto-scroll" : "Pause auto-scroll"}
         >
           {isPaused ? (
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
