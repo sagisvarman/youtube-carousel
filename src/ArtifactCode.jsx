@@ -97,37 +97,23 @@ const AutoCarousel = () => {
       if (videoRef && videoRef.contentWindow) {
         try {
           if (index === currentSlide) {
-            // Force load and play current slide video
+            // Play current slide video
             videoRef.contentWindow.postMessage(
               JSON.stringify({ 
                 event: 'command', 
-                func: 'loadVideoById', 
-                args: [slides[index].videoId, 0, 'hd720']
+                func: 'playVideo',
               }),
               '*'
             );
             
-            // Make sure it's playing (in case loadVideoById doesn't auto-play)
-            setTimeout(() => {
-              if (videoRef.contentWindow) {
-                videoRef.contentWindow.postMessage(
-                  JSON.stringify({ 
-                    event: 'command', 
-                    func: 'playVideo',
-                  }),
-                  '*'
-                );
-                
-                // Unmute current video
-                videoRef.contentWindow.postMessage(
-                  JSON.stringify({ 
-                    event: 'command', 
-                    func: 'unMute',
-                  }),
-                  '*'
-                );
-              }
-            }, 100);
+            // Unmute current video
+            videoRef.contentWindow.postMessage(
+              JSON.stringify({ 
+                event: 'command', 
+                func: 'unMute',
+              }),
+              '*'
+            );
           } else {
             // Pause all other videos
             videoRef.contentWindow.postMessage(
@@ -146,7 +132,7 @@ const AutoCarousel = () => {
         }
       }
     });
-  }, [currentSlide, slides]);
+  }, [currentSlide]);
 
   // Function to reset and start progress bar
   const startProgressBar = useCallback((startFromZero = false) => {
@@ -198,25 +184,8 @@ const AutoCarousel = () => {
   }, [progress, isPaused]);
 
   // Effect to preload videos when currentSlide changes
-  // Effect to preload videos when component mounts and when currentSlide changes
   useEffect(() => {
-    // Initial preload of all videos
     preloadVideos();
-    
-    // Force play the current video on first load
-    const timer = setTimeout(() => {
-      if (videoRefs.current[currentSlide] && videoRefs.current[currentSlide].contentWindow) {
-        videoRefs.current[currentSlide].contentWindow.postMessage(
-          JSON.stringify({ 
-            event: 'command', 
-            func: 'playVideo',
-          }),
-          '*'
-        );
-      }
-    }, 1000); // Give a second for the iframe to fully load
-    
-    return () => clearTimeout(timer);
   }, [currentSlide, preloadVideos]);
 
   // Effect to handle video playback when slide changes
@@ -368,7 +337,7 @@ const AutoCarousel = () => {
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=0&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&origin=${window.location.origin}`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
