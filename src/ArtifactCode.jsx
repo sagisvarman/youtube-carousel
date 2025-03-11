@@ -1,55 +1,6 @@
-// Initialize videoRefs array
-  useEffect(() => {
-    videoRefs.current = videoRefs.current.slice(0, slides.length);
-  }, [slides.length]);
-  
-  // Preload next slide's video
-  useEffect(() => {
-    const nextIndex = (currentSlide + 1) % slides.length;
-    const nextVideoId = slides[nextIndex].videoId;
-    
-    // Preload next video
-    const preloadLink = document.createElement('link');
-    preloadLink.rel = 'preload';
-    preloadLink.href = `https://www.youtube.com/embed/${nextVideoId}`;
-    preloadLink.as = 'iframe';
-    document.head.appendChild(preloadLink);
-    
-    // Create a hidden iframe for the next video to start buffering
-    const hiddenIframe = document.createElement('iframe');
-    hiddenIframe.style.position = 'absolute';
-    hiddenIframe.style.width = '1px';
-    hiddenIframe.style.height = '1px';
-    hiddenIframe.style.opacity = '0.01';
-    hiddenIframe.style.zIndex = '-1000';
-    hiddenIframe.style.pointerEvents = 'none';
-    hiddenIframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope';
-    // Using a lower resolution to load faster
-    hiddenIframe.src = `https://www.youtube.com/embed/${nextVideoId}?enablejsapi=1&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&iv_load_policy=3&vq=low`;
-    document.body.appendChild(hiddenIframe);
-    
-    return () => {
-      document.head.removeChild(preloadLink);
-      document.body.removeChild(hiddenIframe);
-    };
-  }, [currentSlide, slides]);import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const AutoCarousel = () => {
-  // Preload YouTube IFrame API as early as possible
-  useEffect(() => {
-    // Create script for YouTube IFrame API
-    const tag = document.createElement('script');
-    tag.src = "https://www.youtube.com/iframe_api";
-    const firstScriptTag = document.getElementsByTagName('script')[0];
-    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-    
-    // Preload videos by creating image requests
-    slides.forEach(slide => {
-      const img = new Image();
-      img.src = `https://img.youtube.com/vi/${slide.videoId}/maxresdefault.jpg`;
-    });
-  }, []);
-  
   const slides = [
     {
       id: 1,
@@ -84,36 +35,18 @@ const AutoCarousel = () => {
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
 
-  // Toggle pause/play
-  const togglePause = () => {
-    setIsPaused(prev => !prev);
-  };
+  // Initialize videoRefs array
+  useEffect(() => {
+    videoRefs.current = videoRefs.current.slice(0, slides.length);
+  }, [slides.length]);
 
   // Function to play the current video and pause others
   const handleVideoPlayback = () => {
-    // If paused, pause the current video too
-    if (isPaused) {
-      videoRefs.current.forEach((videoRef) => {
-        if (videoRef && videoRef.contentWindow) {
-          try {
-            videoRef.contentWindow.postMessage(
-              JSON.stringify({ event: 'command', func: 'pauseVideo' }),
-              '*'
-            );
-          } catch (error) {
-            console.error('Error controlling YouTube video:', error);
-          }
-        }
-      });
-      return;
-    }
-    
-    // Otherwise, ensure the current video plays
     videoRefs.current.forEach((videoRef, index) => {
       if (videoRef && videoRef.contentWindow) {
         try {
-          if (index === currentSlide) {
-            // Play current slide video and seek to beginning
+          if (index === currentSlide && !isPaused) {
+            // Play current slide video
             videoRef.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'playVideo' }),
               '*'
@@ -159,6 +92,11 @@ const AutoCarousel = () => {
         clearInterval(progressInterval.current);
       }
     }, 16); // Update roughly 60 times per second for smooth animation
+  };
+
+  // Toggle pause/play
+  const togglePause = () => {
+    setIsPaused(prev => !prev);
   };
 
   // Auto-scroll effect
@@ -257,20 +195,10 @@ const AutoCarousel = () => {
       startProgressBar(); // Reset progress bar on manual navigation
     }
   };
-  
+
   return (
     <div className="w-full max-w-2xl mx-auto">
       <div className="relative overflow-hidden rounded-lg shadow-lg">
-        {/* Preload videos */}
-        {slides.map((slide, index) => (
-          <link 
-            key={`preload-${slide.id}`}
-            rel="preload" 
-            href={`https://www.youtube.com/embed/${slide.videoId}`} 
-            as="document" 
-          />
-        ))}
-        
         {/* Slides container */}
         <div 
           className="flex transition-transform duration-500 ease-in-out h-64" 
@@ -281,41 +209,15 @@ const AutoCarousel = () => {
               key={slide.id} 
               className={`flex-shrink-0 w-full relative overflow-hidden ${slide.bgColor} h-64`}
             >
-              <h2 className="text-2xl font-bold mb-2">{slide.title}</h2>
               <div className="w-full h-full absolute top-0 left-0 right-0 bottom-0">
-                {/* Loading placeholder - shown while video loads */}
-                <div 
-                  className={`absolute inset-0 flex items-center justify-center bg-black z-10 transition-opacity duration-500 ${index === currentSlide ? 'opacity-0' : 'opacity-100'}`}
-                  style={{ 
-                    backgroundImage: `url(https://img.youtube.com/vi/${slide.videoId}/hqdefault.jpg)`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center'
-                  }}
-                >
-                  {index === currentSlide && <div className="animate-pulse bg-white/10 w-16 h-16 rounded-full flex items-center justify-center">
-                    <div className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-8 h-8">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                    </div>
-                  </div>}
-                </div>
-                
-                {/* Actual YouTube iframe */}
                 <iframe
-                  ref={el => {
-                    // Only replace the ref if we're in the visible slide
-                    if (index === currentSlide) {
-                      videoRefs.current[index] = el;
-                    }
-                  }}
-                  className="w-full h-full absolute top-0 left-0 z-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide && !isPaused ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0&iv_load_policy=3&playlist=${slide.videoId}`}
+                  ref={el => videoRefs.current[index] = el}
+                  className="w-full h-full absolute top-0 left-0"
+                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide && !isPaused ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0`}
                   title={`YouTube video ${slide.title}`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
-                  loading="eager"
                 ></iframe>
               </div>
             </div>
