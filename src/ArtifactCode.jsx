@@ -27,99 +27,256 @@ const AutoCarousel = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(Array(slides.length).fill(false));
+  const [playerReady, setPlayerReady] = useState(Array(slides.length).fill(false));
   const progressInterval = useRef(null);
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
-  const pausedAt = useRef(0); // Store progress when paused
-  const pausedTime = useRef(null); // Store timestamp when paused
+  const playerRefs = useRef([]);
+  const pausedAt = useRef(0);
+  const pausedTime = useRef(null);
+  const preloadDistance = 2; // Increased: preload 2 videos ahead and behind
+  const slideDuration = 5000; // 5 seconds per slide
 
-  // Initialize videoRefs array
+  // Initialize refs arrays
   useEffect(() => {
     videoRefs.current = videoRefs.current.slice(0, slides.length);
+    playerRefs.current = Array(slides.length).fill(null);
   }, [slides.length]);
 
-  // Function to play the current video and pause others
-  const handleVideoPlayback = useCallback(() => {
-    videoRefs.current.forEach((videoRef, index) => {
-      if (videoRef && videoRef.contentWindow) {
-        try {
-          if (index === currentSlide) {
-            // Play current slide video
-            videoRef.contentWindow.postMessage(
-              JSON.stringify({ event: 'command', func: 'playVideo' }),
-              '*'
-            );
-          } else {
-            // Pause all other videos
-            videoRef.contentWindow.postMessage(
-              JSON.stringify({ event: 'command', func: 'pauseVideo' }),
-              '*'
-            );
+  // Initialize YouTube API
+  useEffect(() => {
+    // Create YouTube API script
+    if (!window.YT) {
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    }
+
+    // Setup callback for when API is ready
+    window.onYouTubeIframeAPIReady = () => {
+      // Initialize players when API is ready
+      initPlayers();
+    };
+
+    // Initialize players if API is already loaded
+    if (window.YT && window.YT.Player) {
+      initPlayers();
+    }
+
+    return () => {
+      // Cleanup players on unmount
+      playerRefs.current.forEach(player => {
+        if (player) {
+          try {
+            player.destroy();
+          } catch (e) {
+            console.error('Error destroying player:', e);
           }
-        } catch (error) {
-          console.error('Error controlling YouTube video:', error);
         }
+      });
+    };
+  }, []);
+
+  // Initialize YouTube players
+  const initPlayers = useCallback(() => {
+    if (!window.YT || !window.YT.Player) return;
+
+    slides.forEach((slide, index) => {
+      // Skip if player already initialized
+      if (playerRefs.current[index]) return;
+
+      const container = videoRefs.current[index];
+      if (!container) return;
+
+      try {
+        // Create player
+        const player = new window.YT.Player(container, {
+          videoId: slide.videoId,
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            enablejsapi: 1,
+            iv_load_policy: 3,
+            modestbranding: 1,
+            playsinline: 1,
+            rel: 0,
+            showinfo: 0,
+            mute: 1,
+            loop: 0,
+          },
+          events: {
+            onReady: (event) => {
+              playerRefs.current[index] = event.target;
+              // Set high quality
+              event.target.setPlaybackQuality('hd720');
+              
+              // Always cue video rather than loading it right away
+              event.target.cueVideoById(slide.videoId);
+              
+              // Mark player as ready
+              setPlayerReady(prev => {
+                const newReady = [...prev];
+                newReady[index] = true;
+                return newReady;
+              });
+              
+              // If this is the first slide, start preloading now
+              if (index === currentSlide) {
+                preloadVideo(index);
+              }
+              
+              // Preload nearby videos based on preloadDistance
+              for (let i = 1; i <= preloadDistance; i++) {
+                const nextIndex = (index + i) % slides.length;
+                const prevIndex = (index - i + slides.length) % slides.length;
+                preloadVideo(nextIndex);
+                preloadVideo(prevIndex);
+              }
+            },
+            onStateChange: (event) => {
+              // When buffer is ready and video can play
+              if (event.data === window.YT.PlayerState.BUFFERING || 
+                  event.data === window.YT.PlayerState.PLAYING) {
+                setIsLoaded(prev => {
+                  const newLoaded = [...prev];
+                  newLoaded[index] = true;
+                  return newLoaded;
+                });
+              }
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Error initializing YouTube player:', error);
       }
     });
-  }, [currentSlide]);
+  }, [slides, currentSlide, preloadDistance]);
 
-  // Function to reset and start progress bar
+  // Preload a specific video
+  const preloadVideo = useCallback((index) => {
+    const player = playerRefs.current[index];
+    if (!player || !playerReady[index]) return;
+    
+    try {
+      // Load video but keep it paused
+      player.cueVideoById({
+        videoId: slides[index].videoId,
+        startSeconds: 0,
+        suggestedQuality: 'hd720'
+      });
+      
+      // Mute non-current videos to allow preloading on mobile
+      if (index !== currentSlide) {
+        player.mute();
+      }
+    } catch (error) {
+      console.error(`Error preloading video ${index}:`, error);
+    }
+  }, [slides, currentSlide, playerReady]);
+
+  // Function to actively preload videos based on current position
+  const preloadVideos = useCallback(() => {
+    // Preload the next few videos
+    for (let i = 1; i <= preloadDistance; i++) {
+      const nextIndex = (currentSlide + i) % slides.length;
+      const prevIndex = (currentSlide - i + slides.length) % slides.length;
+      
+      // Preload next and previous videos
+      preloadVideo(nextIndex);
+      preloadVideo(prevIndex);
+    }
+  }, [currentSlide, preloadDistance, preloadVideo, slides.length]);
+
+  // Handle video playback when slides change
+  const handleVideoPlayback = useCallback(() => {
+    playerRefs.current.forEach((player, index) => {
+      if (!player || !playerReady[index]) return;
+      
+      try {
+        if (index === currentSlide) {
+          // Play and unmute current video
+          player.seekTo(0);
+          player.unMute();
+          player.playVideo();
+        } else {
+          // Pause other videos but keep them buffered
+          player.pauseVideo();
+          player.mute();
+        }
+      } catch (error) {
+        console.error(`Error controlling video ${index}:`, error);
+      }
+    });
+  }, [currentSlide, playerReady]);
+
+  // Start progress bar animation
   const startProgressBar = useCallback((startFromZero = false) => {
-    // Don't start if paused
     if (isPaused) return;
     
-    // Clear any existing interval
     if (progressInterval.current) {
       clearInterval(progressInterval.current);
     }
     
-    // Get start time and initial progress
     const startTime = Date.now();
     let initialProgress = 0;
     
-    // If we're resuming (not starting from zero), use the saved progress
     if (!startFromZero && pausedAt.current > 0) {
       initialProgress = pausedAt.current;
-      setProgress(initialProgress);
-    } else {
-      // Otherwise reset progress
-      setProgress(0);
     }
     
-    const duration = 5000; // 5 seconds in milliseconds
-    const elapsedTime = (initialProgress / 100) * duration;
+    setProgress(initialProgress);
+    
+    const elapsedTime = (initialProgress / 100) * slideDuration;
     
     progressInterval.current = setInterval(() => {
       const elapsed = Date.now() - startTime + elapsedTime;
-      const newProgress = Math.min(100, (elapsed / duration) * 100);
+      const newProgress = Math.min(100, (elapsed / slideDuration) * 100);
       setProgress(newProgress);
       
-      // Clear interval when we reach 100%
       if (newProgress >= 100) {
         clearInterval(progressInterval.current);
       }
-    }, 16); // Update roughly 60 times per second for smooth animation
-  }, [isPaused]);
+    }, 16); // ~60fps updates
+  }, [isPaused, slideDuration]);
 
-  // Toggle pause/play
+  // Toggle pause/play state
   const togglePause = useCallback(() => {
     if (!isPaused) {
-      // If we're pausing, store the current progress and timestamp
       pausedAt.current = progress;
       pausedTime.current = Date.now();
+      
+      // Pause current video when carousel is paused
+      const currentPlayer = playerRefs.current[currentSlide];
+      if (currentPlayer && playerReady[currentSlide]) {
+        currentPlayer.pauseVideo();
+      }
+    } else {
+      // Resume video playback when carousel is resumed
+      const currentPlayer = playerRefs.current[currentSlide];
+      if (currentPlayer && playerReady[currentSlide]) {
+        currentPlayer.playVideo();
+      }
     }
     
     setIsPaused(prev => !prev);
-  }, [progress, isPaused]);
+  }, [progress, isPaused, currentSlide, playerReady]);
+
+  // Effect to preload videos when currentSlide changes
+  useEffect(() => {
+    preloadVideos();
+  }, [currentSlide, preloadVideos]);
 
   // Effect to handle video playback when slide changes
   useEffect(() => {
     handleVideoPlayback();
   }, [currentSlide, handleVideoPlayback]);
 
-  // Effect to handle pause state changes
+  // Manage auto-scroll and progress bar
   useEffect(() => {
-    // Clear any existing intervals first
+    // Clear existing intervals
     if (slideInterval.current) {
       clearInterval(slideInterval.current);
       slideInterval.current = null;
@@ -130,71 +287,67 @@ const AutoCarousel = () => {
       progressInterval.current = null;
     }
     
-    // Only set up intervals if NOT paused
+    // Only run if not paused
     if (!isPaused) {
-      // Start progress bar from saved position if available
-      startProgressBar(false); // false means don't start from zero
+      startProgressBar(false);
       
-      // Calculate remaining time for this slide
+      // Calculate remaining time
       const remainingPercent = 100 - pausedAt.current;
-      const totalDuration = 5000; // 5 seconds
-      const remainingTime = (remainingPercent / 100) * totalDuration;
+      const remainingTime = (remainingPercent / 100) * slideDuration;
       
-      // Set up auto-scroll interval with the remaining time for the first cycle
-      if (remainingTime > 0 && remainingTime < totalDuration) {
-        // First, set a one-time timeout for the remaining time
+      if (remainingTime > 0 && remainingTime < slideDuration) {
+        // First timeout for remaining time of current slide
         const timeout = setTimeout(() => {
-          // Move to next slide when the remaining time is up
-          setCurrentSlide((prevSlide) => 
-            prevSlide === slides.length - 1 ? 0 : prevSlide + 1
-          );
+          const nextSlide = (currentSlide + 1) % slides.length;
           
-          // Reset progress and start a normal interval
+          // Preload next slide's next slide before transition
+          const nextNextSlide = (nextSlide + 1) % slides.length;
+          preloadVideo(nextNextSlide);
+          
+          // Move to next slide
+          setCurrentSlide(nextSlide);
           pausedAt.current = 0;
           startProgressBar(true);
           
-          // Then set up the regular interval
+          // Then set regular interval
           slideInterval.current = setInterval(() => {
-            setCurrentSlide((prevSlide) => 
-              prevSlide === slides.length - 1 ? 0 : prevSlide + 1
-            );
+            setCurrentSlide(prevSlide => {
+              const next = (prevSlide + 1) % slides.length;
+              return next;
+            });
             startProgressBar(true);
-          }, totalDuration);
+          }, slideDuration);
         }, remainingTime);
         
-        // Store the timeout ID for cleanup
         return () => {
           clearTimeout(timeout);
           if (slideInterval.current) clearInterval(slideInterval.current);
           if (progressInterval.current) clearInterval(progressInterval.current);
         };
       } else {
-        // If we don't have a valid remaining time, start normal interval
+        // Start normal interval
         slideInterval.current = setInterval(() => {
-          setCurrentSlide((prevSlide) => 
-            prevSlide === slides.length - 1 ? 0 : prevSlide + 1
-          );
+          setCurrentSlide(prevSlide => {
+            const next = (prevSlide + 1) % slides.length;
+            return next;
+          });
           startProgressBar(true);
-        }, totalDuration);
+        }, slideDuration);
       }
     }
     
     return () => {
-      if (slideInterval.current) {
-        clearInterval(slideInterval.current);
-      }
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
+      if (slideInterval.current) clearInterval(slideInterval.current);
+      if (progressInterval.current) clearInterval(progressInterval.current);
     };
-  }, [isPaused, slides.length, startProgressBar]);
+  }, [isPaused, slides.length, startProgressBar, currentSlide, preloadVideo, slideDuration]);
 
   // Manual navigation
   const goToSlide = useCallback((index) => {
     setCurrentSlide(index);
     if (!isPaused) {
-      pausedAt.current = 0; // Reset saved progress
-      startProgressBar(true); // Start from beginning for manual navigation
+      pausedAt.current = 0;
+      startProgressBar(true);
     }
   }, [isPaused, startProgressBar]);
 
@@ -203,8 +356,8 @@ const AutoCarousel = () => {
       prevSlide === 0 ? slides.length - 1 : prevSlide - 1
     );
     if (!isPaused) {
-      pausedAt.current = 0; // Reset saved progress
-      startProgressBar(true); // Start from beginning for manual navigation
+      pausedAt.current = 0;
+      startProgressBar(true);
     }
   }, [isPaused, slides.length, startProgressBar]);
 
@@ -213,8 +366,8 @@ const AutoCarousel = () => {
       prevSlide === slides.length - 1 ? 0 : prevSlide + 1
     );
     if (!isPaused) {
-      pausedAt.current = 0; // Reset saved progress
-      startProgressBar(true); // Start from beginning for manual navigation
+      pausedAt.current = 0;
+      startProgressBar(true);
     }
   }, [isPaused, slides.length, startProgressBar]);
 
@@ -223,7 +376,7 @@ const AutoCarousel = () => {
       <div className="relative overflow-hidden rounded-lg shadow-lg">
         {/* Slides container */}
         <div 
-          className="flex transition-transform duration-500 ease-in-out h-64" 
+          className="flex transition-transform duration-500 ease-out h-64" 
           style={{ transform: `translateX(-${currentSlide * 100}%)` }}
         >
           {slides.map((slide, index) => (
@@ -232,15 +385,19 @@ const AutoCarousel = () => {
               className="flex-shrink-0 w-full relative overflow-hidden h-64"
             >
               <div className="w-full h-full absolute top-0 left-0 right-0 bottom-0 bg-black">
-                <iframe
+                {/* Player container div */}
+                <div
+                  id={`player-${index}`}
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
-                  src={`https://www.youtube.com/embed/${slide.videoId}?enablejsapi=1&autoplay=${index === currentSlide ? 1 : 0}&mute=1&controls=0&rel=0&playsinline=1&modestbranding=1&showinfo=0`}
-                  title={`YouTube video ${slide.title}`}
-                  frameBorder="0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                ></iframe>
+                ></div>
+                
+                {/* Loading indicator */}
+                {(!isLoaded[index] || !playerReady[index]) && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -283,7 +440,7 @@ const AutoCarousel = () => {
           </div>
         </div>
         
-        {/* Pause/Play Button for carousel auto-scroll */}
+        {/* Pause/Play Button */}
         <button
           className="absolute bottom-3 left-4 bg-white/30 hover:bg-white/50 text-white w-8 h-8 rounded-full flex items-center justify-center"
           onClick={togglePause}
