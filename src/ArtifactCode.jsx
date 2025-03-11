@@ -5,26 +5,22 @@ const AutoCarousel = () => {
     {
       id: 1,
       title: 'Video 1',
-      videoId: 'dQw4w9WgXcQ', // YouTube video ID
-      bgColor: 'bg-blue-500'
+      videoId: 'dQw4w9WgXcQ' // YouTube video ID
     },
     {
       id: 2,
       title: 'Video 2',
-      videoId: 'jNQXAC9IVRw', // YouTube video ID
-      bgColor: 'bg-green-500'
+      videoId: 'jNQXAC9IVRw' // YouTube video ID
     },
     {
       id: 3,
       title: 'Video 3',
-      videoId: 'ZyhrYis509A', // YouTube video ID
-      bgColor: 'bg-purple-500'
+      videoId: 'ZyhrYis509A' // YouTube video ID
     },
     {
       id: 4,
       title: 'Video 4',
-      videoId: 'FTQbiNvZqaY', // YouTube video ID
-      bgColor: 'bg-red-500'
+      videoId: 'FTQbiNvZqaY' // YouTube video ID
     }
   ];
 
@@ -34,6 +30,8 @@ const AutoCarousel = () => {
   const progressInterval = useRef(null);
   const slideInterval = useRef(null);
   const videoRefs = useRef([]);
+  const pausedAt = useRef(0); // Store progress when paused
+  const pausedTime = useRef(null); // Store timestamp when paused
 
   // Initialize videoRefs array
   useEffect(() => {
@@ -66,7 +64,7 @@ const AutoCarousel = () => {
   }, [currentSlide]);
 
   // Function to reset and start progress bar
-  const startProgressBar = useCallback(() => {
+  const startProgressBar = useCallback((startFromZero = false) => {
     // Don't start if paused
     if (isPaused) return;
     
@@ -75,15 +73,24 @@ const AutoCarousel = () => {
       clearInterval(progressInterval.current);
     }
     
-    // Reset progress
-    setProgress(0);
-    
-    // Set up new interval to update progress
+    // Get start time and initial progress
     const startTime = Date.now();
+    let initialProgress = 0;
+    
+    // If we're resuming (not starting from zero), use the saved progress
+    if (!startFromZero && pausedAt.current > 0) {
+      initialProgress = pausedAt.current;
+      setProgress(initialProgress);
+    } else {
+      // Otherwise reset progress
+      setProgress(0);
+    }
+    
     const duration = 5000; // 5 seconds in milliseconds
+    const elapsedTime = (initialProgress / 100) * duration;
     
     progressInterval.current = setInterval(() => {
-      const elapsed = Date.now() - startTime;
+      const elapsed = Date.now() - startTime + elapsedTime;
       const newProgress = Math.min(100, (elapsed / duration) * 100);
       setProgress(newProgress);
       
@@ -96,8 +103,14 @@ const AutoCarousel = () => {
 
   // Toggle pause/play
   const togglePause = useCallback(() => {
+    if (!isPaused) {
+      // If we're pausing, store the current progress and timestamp
+      pausedAt.current = progress;
+      pausedTime.current = Date.now();
+    }
+    
     setIsPaused(prev => !prev);
-  }, []);
+  }, [progress, isPaused]);
 
   // Effect to handle video playback when slide changes
   useEffect(() => {
@@ -119,16 +132,51 @@ const AutoCarousel = () => {
     
     // Only set up intervals if NOT paused
     if (!isPaused) {
-      // Start progress bar
-      startProgressBar();
+      // Start progress bar from saved position if available
+      startProgressBar(false); // false means don't start from zero
       
-      // Set up auto-scroll interval
-      slideInterval.current = setInterval(() => {
-        setCurrentSlide((prevSlide) => 
-          prevSlide === slides.length - 1 ? 0 : prevSlide + 1
-        );
-        startProgressBar();
-      }, 5000);
+      // Calculate remaining time for this slide
+      const remainingPercent = 100 - pausedAt.current;
+      const totalDuration = 5000; // 5 seconds
+      const remainingTime = (remainingPercent / 100) * totalDuration;
+      
+      // Set up auto-scroll interval with the remaining time for the first cycle
+      if (remainingTime > 0 && remainingTime < totalDuration) {
+        // First, set a one-time timeout for the remaining time
+        const timeout = setTimeout(() => {
+          // Move to next slide when the remaining time is up
+          setCurrentSlide((prevSlide) => 
+            prevSlide === slides.length - 1 ? 0 : prevSlide + 1
+          );
+          
+          // Reset progress and start a normal interval
+          pausedAt.current = 0;
+          startProgressBar(true);
+          
+          // Then set up the regular interval
+          slideInterval.current = setInterval(() => {
+            setCurrentSlide((prevSlide) => 
+              prevSlide === slides.length - 1 ? 0 : prevSlide + 1
+            );
+            startProgressBar(true);
+          }, totalDuration);
+        }, remainingTime);
+        
+        // Store the timeout ID for cleanup
+        return () => {
+          clearTimeout(timeout);
+          if (slideInterval.current) clearInterval(slideInterval.current);
+          if (progressInterval.current) clearInterval(progressInterval.current);
+        };
+      } else {
+        // If we don't have a valid remaining time, start normal interval
+        slideInterval.current = setInterval(() => {
+          setCurrentSlide((prevSlide) => 
+            prevSlide === slides.length - 1 ? 0 : prevSlide + 1
+          );
+          startProgressBar(true);
+        }, totalDuration);
+      }
     }
     
     return () => {
@@ -145,7 +193,8 @@ const AutoCarousel = () => {
   const goToSlide = useCallback((index) => {
     setCurrentSlide(index);
     if (!isPaused) {
-      startProgressBar(); // Reset progress bar on manual navigation
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, startProgressBar]);
 
@@ -154,7 +203,8 @@ const AutoCarousel = () => {
       prevSlide === 0 ? slides.length - 1 : prevSlide - 1
     );
     if (!isPaused) {
-      startProgressBar(); // Reset progress bar on manual navigation
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, slides.length, startProgressBar]);
 
@@ -163,7 +213,8 @@ const AutoCarousel = () => {
       prevSlide === slides.length - 1 ? 0 : prevSlide + 1
     );
     if (!isPaused) {
-      startProgressBar(); // Reset progress bar on manual navigation
+      pausedAt.current = 0; // Reset saved progress
+      startProgressBar(true); // Start from beginning for manual navigation
     }
   }, [isPaused, slides.length, startProgressBar]);
 
@@ -178,9 +229,9 @@ const AutoCarousel = () => {
           {slides.map((slide, index) => (
             <div 
               key={slide.id} 
-              className={`flex-shrink-0 w-full relative overflow-hidden ${slide.bgColor} h-64`}
+              className="flex-shrink-0 w-full relative overflow-hidden h-64"
             >
-              <div className="w-full h-full absolute top-0 left-0 right-0 bottom-0">
+              <div className="w-full h-full absolute top-0 left-0 right-0 bottom-0 bg-black">
                 <iframe
                   ref={el => videoRefs.current[index] = el}
                   className="w-full h-full absolute top-0 left-0"
